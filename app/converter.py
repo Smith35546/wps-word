@@ -12,7 +12,8 @@ from typing import Callable, Iterable
 import pdfplumber
 import pypdfium2 as pdfium
 from docx import Document
-from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT
+from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
+from docx.oxml import OxmlElement
 from docx.shared import Cm, Pt
 
 
@@ -65,9 +66,9 @@ class PdfToWordConverter:
         if not source.is_file():
             raise ConversionError(f"找不到输入文件：{source}")
 
-        document = self._new_document()
         try:
             with pdfplumber.open(source) as plumber_pdf:
+                document = self._new_document(plumber_pdf.pages[0].width, plumber_pdf.pages[0].height)
                 rendered_pdf = pdfium.PdfDocument(str(source))
                 if len(plumber_pdf.pages) != len(rendered_pdf):
                     raise ConversionError("PDF 页数读取不一致，已停止转换以避免遗漏内容。")
@@ -92,9 +93,13 @@ class PdfToWordConverter:
         progress(f"已生成：{destination.name}")
 
     @staticmethod
-    def _new_document() -> Document:
+    def _new_document(page_width: float | None = None, page_height: float | None = None) -> Document:
         document = Document()
         section = document.sections[0]
+        if page_width is not None:
+            section.page_width = Pt(page_width)
+        if page_height is not None:
+            section.page_height = Pt(page_height)
         section.top_margin = Cm(1.7)
         section.bottom_margin = Cm(1.7)
         section.left_margin = Cm(1.7)
@@ -205,6 +210,30 @@ class PdfToWordConverter:
         word_table = document.add_table(rows=len(y_edges) - 1, cols=len(x_edges) - 1)
         word_table.style = "Table Grid"
         word_table.autofit = False
+        word_table.alignment = WD_TABLE_ALIGNMENT.LEFT
+        section = document.sections[0]
+        available_width = section.page_width.pt - section.left_margin.pt - section.right_margin.pt
+        source_table_width = x_edges[-1] - x_edges[0]
+        width_scale = 1.0
+        if source_table_width > available_width:
+            width_scale = available_width / source_table_width
+
+        column_widths = [max((end - start) * width_scale, 1.0) for start, end in zip(x_edges, x_edges[1:])]
+        for column, width in zip(word_table.columns, column_widths):
+            column.width = Pt(width)
+        table_width = sum(column_widths)
+        self._set_table_width(word_table, table_width)
+
+        source_left = x_edges[0] * width_scale
+        table_indent = max(0.0, source_left - section.left_margin.pt)
+        table_indent = min(table_indent, max(0.0, available_width - table_width))
+        self._set_table_indent(word_table, table_indent)
+
+        for row, start, end in zip(word_table.rows, y_edges, y_edges[1:]):
+            row_height = max(end - start, 1.0)
+            row.height = Pt(row_height)
+            row.height_rule = WD_ROW_HEIGHT_RULE.AT_LEAST
+
         for row in word_table.rows:
             for cell in row.cells:
                 cell.vertical_alignment = WD_CELL_VERTICAL_ALIGNMENT.CENTER
@@ -216,12 +245,30 @@ class PdfToWordConverter:
             target = word_table.cell(start_row, start_col)
             if start_row != end_row or start_col != end_col:
                 target = target.merge(word_table.cell(end_row, end_col))
-            target.width = Cm(max((x1 - x0) * 0.03528, 0.4))
+            target.width = Pt(max((x1 - x0) * width_scale, Cm(0.4).pt))
             content = self._text_in_box(lines, (x0, y0, x1, y1), scale_x, scale_y)
             target.text = content
             for paragraph in target.paragraphs:
                 paragraph.paragraph_format.space_after = Pt(0)
                 paragraph.paragraph_format.space_before = Pt(0)
+
+    @staticmethod
+    def _set_table_width(table, width: float) -> None:
+        table_width = table._tbl.tblPr.first_child_found_in("w:tblW")
+        if table_width is None:
+            table_width = OxmlElement("w:tblW")
+            table._tbl.tblPr.append(table_width)
+        table_width.set(qn("w:type"), "dxa")
+        table_width.set(qn("w:w"), str(int(round(Pt(width).twips))))
+
+    @staticmethod
+    def _set_table_indent(table, indent: float) -> None:
+        table_indent = table._tbl.tblPr.first_child_found_in("w:tblInd")
+        if table_indent is None:
+            table_indent = OxmlElement("w:tblInd")
+            table._tbl.tblPr.append(table_indent)
+        table_indent.set(qn("w:type"), "dxa")
+        table_indent.set(qn("w:w"), str(int(round(Pt(indent).twips))))
 
     @staticmethod
     def _edges(values: Iterable[float]) -> list[float]:

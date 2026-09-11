@@ -61,5 +61,32 @@ class ConverterTests(unittest.TestCase):
         actual = PdfToWordConverter()._text_in_box((line,), (0.0, 0.0, 100.0, 40.0), 1.0, 1.0)
         self.assertEqual(actual, "\u5b8c\u6210\uff0c\u7ee7\u7eed")
 
+    def test_append_table_preserves_uneven_grid_and_row_heights(self) -> None:
+        class UnevenTable:
+            cells = [
+                (84.6, 147.44, 167.9, 182.39),
+                (167.9, 147.44, 239.9, 182.39),
+                (239.9, 147.44, 539.85, 182.39),
+                (84.6, 182.39, 167.9, 420.79),
+                (167.9, 182.39, 239.9, 420.79),
+                (239.9, 182.39, 539.85, 420.79),
+            ]
+
+        document = Document()
+        PdfToWordConverter()._append_table(document, UnevenTable(), (), 1.0, 1.0)
+        result = document.tables[0]
+        widths = [column.w.twips for column in result._tbl.tblGrid.gridCol_lst]
+
+        self.assertGreater(widths[2], widths[0] * 3)
+        self.assertGreater(widths[0], widths[1])
+        self.assertIsNotNone(result.rows[0].height)
+        self.assertGreater(result.rows[1].height.twips, result.rows[0].height.twips * 4)
+
+    def test_new_document_preserves_source_page_size(self) -> None:
+        document = PdfToWordConverter._new_document(595.3, 841.9)
+        section = document.sections[0]
+        self.assertAlmostEqual(section.page_width.pt, 595.3, places=0)
+        self.assertAlmostEqual(section.page_height.pt, 841.9, places=0)
+
 if __name__ == "__main__":
     unittest.main()
