@@ -175,7 +175,31 @@ class PdfToWordConverter:
         cjk_or_punctuation = r"[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]"
         compact = re.sub(rf"(?<={cjk_or_punctuation})\s+(?={cjk_or_punctuation})", "", compact)
         compact = re.sub(r"([（(])\s*(\d{1,2})\s*([）)])", r"\1\2\3", compact)
+        compact = PdfToWordConverter._recover_misread_list_marker(compact)
         return compact
+
+    @staticmethod
+    def _recover_misread_list_marker(text: str) -> str:
+        """Restore a missing list marker only when its surrounding sequence proves it."""
+        valid_marker = re.compile(r"([（(])\s*([1-8])\s*([）)])")
+
+        def replace(match) -> str:
+            earlier_markers = list(valid_marker.finditer(text[:match.start()]))
+            if not earlier_markers:
+                return match.group(0)
+            previous = earlier_markers[-1]
+            if match.start() - previous.end() > 280:
+                return match.group(0)
+            return (
+                f"{match.group('boundary')}{previous.group(1)}"
+                f"{int(previous.group(2)) + 1}{previous.group(3)}"
+            )
+
+        return re.sub(
+            r"(?P<boundary>[。；;])\s*0\s*[）)](?=\s*[\u3400-\u9fff])",
+            replace,
+            text,
+        )
 
     def _append_page(self, document: Document, page, lines: tuple[OcrLine, ...], image_size: tuple[int, int]) -> None:
         tables = page.find_tables()

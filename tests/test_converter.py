@@ -50,6 +50,21 @@ class ConverterTests(unittest.TestCase):
     def test_normalize_numbered_full_width_parentheses(self) -> None:
         self.assertEqual(PdfToWordConverter._normalize_text("\uff08 2 \uff09"), "\uff082\uff09")
 
+    def test_normalize_recovers_misread_list_marker(self) -> None:
+        source = (
+            "\uff081\uff09\u5bf9\u7956\u56fd\u7684\u6210\u5c31\u548c\u6587\u5316\u611f\u5230\u81ea\u8c6a\uff0c\u62e5\u6709\u6c11\u65cf\u81ea\u5c0a\u5fc3\u548c\u6c11\u65cf\u81ea\u4fe1\u5fc3"
+            "\uff082\uff09\u7ef4\u62a4\u56fd\u5bb6\u5229\u76ca\uff0c\u5fd7\u613f\u4e3a\u56fd\u5bb6\u548c\u793e\u4f1a\u670d\u52a1\u3002 0 \uff09\u5173\u5fc3\u56fd\u5bb6\u5927\u4e8b"
+        )
+        expected = (
+            "\uff081\uff09\u5bf9\u7956\u56fd\u7684\u6210\u5c31\u548c\u6587\u5316\u611f\u5230\u81ea\u8c6a\uff0c\u62e5\u6709\u6c11\u65cf\u81ea\u5c0a\u5fc3\u548c\u6c11\u65cf\u81ea\u4fe1\u5fc3"
+            "\uff082\uff09\u7ef4\u62a4\u56fd\u5bb6\u5229\u76ca\uff0c\u5fd7\u613f\u4e3a\u56fd\u5bb6\u548c\u793e\u4f1a\u670d\u52a1\u3002\uff083\uff09\u5173\u5fc3\u56fd\u5bb6\u5927\u4e8b"
+        )
+        self.assertEqual(PdfToWordConverter._normalize_text(source), expected)
+
+    def test_normalize_keeps_unrelated_zero_parenthesis(self) -> None:
+        source = "\u9879\u76ee\u5b8c\u6210\u7387\u4e3a 0 \uff09\u4e0d\u7eb3\u5165\u5217\u8868"
+        self.assertEqual(PdfToWordConverter._normalize_text(source), source)
+
     def test_punctuation_on_a_lower_baseline_stays_with_its_text_row(self) -> None:
         line = OcrLine("", 10.0, 10.0, 80.0, 20.0, (
             OcrWord("\u5b8c", 10.0, 10.0, 12.0, 20.0),
