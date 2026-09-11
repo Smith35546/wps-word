@@ -47,5 +47,19 @@ class ConverterTests(unittest.TestCase):
         self.assertEqual(converter._text_in_box((line,), (0.0, 0.0, 60.0, 20.0), 1.0, 1.0), "\u6027\u522b")
         self.assertEqual(converter._text_in_box((line,), (60.0, 0.0, 120.0, 20.0), 1.0, 1.0), "\u7537")
 
+    def test_normalize_numbered_full_width_parentheses(self) -> None:
+        self.assertEqual(PdfToWordConverter._normalize_text("\uff08 2 \uff09"), "\uff082\uff09")
+
+    def test_punctuation_on_a_lower_baseline_stays_with_its_text_row(self) -> None:
+        line = OcrLine("", 10.0, 10.0, 80.0, 20.0, (
+            OcrWord("\u5b8c", 10.0, 10.0, 12.0, 20.0),
+            OcrWord("\u6210", 27.0, 10.0, 12.0, 20.0),
+            OcrWord("\uff0c", 43.0, 25.0, 4.0, 5.0),
+            OcrWord("\u7ee7", 55.0, 10.0, 12.0, 20.0),
+            OcrWord("\u7eed", 72.0, 10.0, 12.0, 20.0),
+        ))
+        actual = PdfToWordConverter()._text_in_box((line,), (0.0, 0.0, 100.0, 40.0), 1.0, 1.0)
+        self.assertEqual(actual, "\u5b8c\u6210\uff0c\u7ee7\u7eed")
+
 if __name__ == "__main__":
     unittest.main()

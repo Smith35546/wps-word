@@ -168,7 +168,9 @@ class PdfToWordConverter:
         """Remove OCR-inserted gaps between Chinese characters without joining English words."""
         compact = " ".join(text.strip().split())
         cjk_or_punctuation = r"[\u3000-\u303f\u3400-\u9fff\uff00-\uffef]"
-        return re.sub(rf"(?<={cjk_or_punctuation})\s+(?={cjk_or_punctuation})", "", compact)
+        compact = re.sub(rf"(?<={cjk_or_punctuation})\s+(?={cjk_or_punctuation})", "", compact)
+        compact = re.sub(r"([（(])\s*(\d{1,2})\s*([）)])", r"\1\2\3", compact)
+        return compact
 
     def _append_page(self, document: Document, page, lines: tuple[OcrLine, ...], image_size: tuple[int, int]) -> None:
         tables = page.find_tables()
@@ -245,15 +247,20 @@ class PdfToWordConverter:
 
     def _words_to_text(self, words: list[OcrWord]) -> str:
         rows: list[list[OcrWord]] = []
-        row_centers: list[float] = []
+        row_bounds: list[tuple[float, float]] = []
         for word in sorted(words, key=lambda item: (item.center[1], item.x)):
-            center_y = word.center[1]
-            if not rows or abs(center_y - row_centers[-1]) > max(4.0, word.height * 0.65):
+            if not rows:
                 rows.append([word])
-                row_centers.append(center_y)
+                row_bounds.append((word.y, word.y + word.height))
+                continue
+            row_top, row_bottom = row_bounds[-1]
+            tolerance = max(2.0, min(word.height, row_bottom - row_top) * 0.25)
+            if word.y > row_bottom + tolerance or word.y + word.height < row_top - tolerance:
+                rows.append([word])
+                row_bounds.append((word.y, word.y + word.height))
                 continue
             rows[-1].append(word)
-            row_centers[-1] = sum(item.center[1] for item in rows[-1]) / len(rows[-1])
+            row_bounds[-1] = (min(row_top, word.y), max(row_bottom, word.y + word.height))
         return "\n".join(
             self._normalize_text(" ".join(word.text for word in sorted(row, key=lambda item: item.x)))
             for row in rows
