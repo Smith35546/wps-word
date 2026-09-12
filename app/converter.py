@@ -12,6 +12,7 @@ from typing import Callable, Iterable
 import pdfplumber
 import pypdfium2 as pdfium
 from docx import Document
+from docx.enum.section import WD_SECTION_START
 from docx.enum.table import WD_CELL_VERTICAL_ALIGNMENT, WD_ROW_HEIGHT_RULE, WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement
 from docx.shared import Cm, Pt
@@ -74,6 +75,11 @@ class PdfToWordConverter:
                     raise ConversionError("PDF 页数读取不一致，已停止转换以避免遗漏内容。")
 
                 for page_index, page in enumerate(plumber_pdf.pages):
+                    if page_index:
+                        section = document.add_section(WD_SECTION_START.NEW_PAGE)
+                    else:
+                        section = document.sections[-1]
+                    self._configure_page_section(section, page.width, page.height)
                     progress(f"正在识别第 {page_index + 1}/{len(plumber_pdf.pages)} 页…")
                     image_path, image_size = self._render_page(rendered_pdf, page_index)
                     try:
@@ -82,8 +88,6 @@ class PdfToWordConverter:
                         image_path.unlink(missing_ok=True)
 
                     self._append_page(document, page, lines, image_size)
-                    if page_index < len(plumber_pdf.pages) - 1:
-                        document.add_page_break()
         except ConversionError:
             raise
         except Exception as exc:
@@ -109,6 +113,16 @@ class PdfToWordConverter:
         normal._element.rPr.rFonts.set(qn("w:eastAsia"), "Microsoft YaHei")
         normal.font.size = Pt(10.5)
         return document
+
+    @staticmethod
+    def _configure_page_section(section, page_width: float, page_height: float) -> None:
+        """Set a fresh page section to the source page geometry before laying it out."""
+        section.page_width = Pt(page_width)
+        section.page_height = Pt(page_height)
+        section.top_margin = Cm(1.7)
+        section.bottom_margin = Cm(1.7)
+        section.left_margin = Cm(1.7)
+        section.right_margin = Cm(1.7)
 
     @staticmethod
     def _render_page(pdf: pdfium.PdfDocument, page_index: int) -> tuple[Path, tuple[int, int]]:
@@ -215,13 +229,35 @@ class PdfToWordConverter:
 
         table_events = [(table.bbox[1], "table", table) for table in tables]
         line_events = [(line.y / scale_y, "line", line) for line in outside_lines]
-        for _, kind, item in sorted(table_events + line_events, key=lambda event: event[0]):
+        events = sorted(table_events + line_events, key=lambda event: event[0])
+        if not events:
+            return
+
+        first_y, first_kind, _ = events[0]
+        normal_size = document.styles["Normal"].font.size.pt
+        # Flowing tables start at the top margin; text glyphs begin roughly half a
+        # font size below it in Word's default line box.
+        first_text_inset = normal_size / 2 if first_kind == "line" else 0.0
+        document.sections[-1].top_margin = Pt(max(first_y - first_text_inset, 0.0))
+
+        previous_line: OcrLine | None = None
+        previous_paragraph = None
+        for event_y, kind, item in events:
             if kind == "table":
+                if previous_line is not None and previous_paragraph is not None:
+                    previous_line_bottom = (previous_line.y + previous_line.height) / scale_y
+                    source_gap = event_y - previous_line_bottom
+                    if source_gap > previous_paragraph.paragraph_format.space_after.pt:
+                        previous_paragraph.paragraph_format.space_after = Pt(source_gap)
                 self._append_table(document, item, lines, scale_x, scale_y)
+                previous_line = None
+                previous_paragraph = None
             else:
                 paragraph = document.add_paragraph()
                 paragraph.paragraph_format.space_after = Pt(3)
                 paragraph.add_run(item.text)
+                previous_line = item
+                previous_paragraph = paragraph
 
     def _append_table(self, document: Document, table, lines: tuple[OcrLine, ...], scale_x: float, scale_y: float) -> None:
         x_edges = self._edges(cell[0] for cell in table.cells) + self._edges(cell[2] for cell in table.cells)
@@ -235,7 +271,7 @@ class PdfToWordConverter:
         word_table.style = "Table Grid"
         word_table.autofit = False
         word_table.alignment = WD_TABLE_ALIGNMENT.LEFT
-        section = document.sections[0]
+        section = document.sections[-1]
         available_width = section.page_width.pt - section.left_margin.pt - section.right_margin.pt
         source_table_width = x_edges[-1] - x_edges[0]
         # Use the Word printable area rather than the PDF scan margins as the output canvas.

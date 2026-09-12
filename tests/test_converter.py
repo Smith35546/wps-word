@@ -125,6 +125,47 @@ class ConverterTests(unittest.TestCase):
         self.assertAlmostEqual(grid_widths[1] / grid_widths[0], 2.0, places=2)
         self.assertEqual(table_indent.get(qn("w:w")), "0")
 
+    def test_append_table_keeps_source_row_heights_when_fit_to_width(self) -> None:
+        class SourceTable:
+            cells = [(84.6, 147.44, 539.85, 693.44)]
+
+        document = PdfToWordConverter._new_document(595.3, 841.9)
+        PdfToWordConverter()._append_table(document, SourceTable(), (), 1.0, 1.0)
+        result = document.tables[0]
+        table_height = sum(row.height.pt for row in result.rows)
+        source_height = 693.44 - 147.44
+
+        self.assertAlmostEqual(table_height, source_height, delta=0.1)
+
+    def test_append_page_restores_heading_to_table_gap(self) -> None:
+        class PositionedTable:
+            bbox = (84.6, 147.44, 539.85, 693.44)
+            cells = [(84.6, 147.44, 539.85, 693.44)]
+
+        class PositionedPage:
+            width = 595.3
+            height = 841.9
+
+            @staticmethod
+            def find_tables():
+                return [PositionedTable()]
+
+        first_heading = OcrLine("附件一", 90.0, 73.32, 36.0, 12.49, ())
+        second_heading = OcrLine("计划表", 127.0, 92.9, 340.0, 19.99, ())
+        document = PdfToWordConverter._new_document(595.3, 841.9)
+
+        PdfToWordConverter()._append_page(
+            document,
+            PositionedPage(),
+            (first_heading, second_heading),
+            (595.3, 841.9),
+        )
+
+        expected_margin = first_heading.y - document.styles["Normal"].font.size.pt / 2
+        expected_gap = PositionedTable.bbox[1] - (second_heading.y + second_heading.height)
+        self.assertAlmostEqual(document.sections[-1].top_margin.pt, expected_margin, delta=0.1)
+        self.assertAlmostEqual(document.paragraphs[-1].paragraph_format.space_after.pt, expected_gap, delta=0.1)
+
     def test_new_document_preserves_source_page_size(self) -> None:
         document = PdfToWordConverter._new_document(595.3, 841.9)
         section = document.sections[0]
