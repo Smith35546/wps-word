@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 from docx import Document
+from docx.oxml.ns import qn
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "app"))
 
@@ -76,6 +77,17 @@ class ConverterTests(unittest.TestCase):
         actual = PdfToWordConverter()._text_in_box((line,), (0.0, 0.0, 100.0, 40.0), 1.0, 1.0)
         self.assertEqual(actual, "\u5b8c\u6210\uff0c\u7ee7\u7eed")
 
+    def test_words_to_text_recovers_list_marker_across_ocr_rows(self) -> None:
+        line = OcrLine("", 0.0, 0.0, 100.0, 40.0, (
+            OcrWord("\uff08", 10.0, 10.0, 5.0, 10.0), OcrWord("2", 16.0, 10.0, 5.0, 10.0),
+            OcrWord("\uff09", 22.0, 10.0, 5.0, 10.0), OcrWord("\u670d\u52a1\u3002", 30.0, 10.0, 20.0, 10.0),
+            OcrWord("0", 10.0, 30.0, 5.0, 10.0), OcrWord("\uff09", 16.0, 30.0, 5.0, 10.0),
+            OcrWord("\u5173\u5fc3", 24.0, 30.0, 12.0, 10.0),
+        ))
+
+        actual = PdfToWordConverter()._text_in_box((line,), (0.0, 0.0, 100.0, 40.0), 1.0, 1.0)
+        self.assertEqual(actual, "\uff082\uff09\u670d\u52a1\u3002\uff083\uff09\u5173\u5fc3")
+
     def test_append_table_preserves_uneven_grid_and_row_heights(self) -> None:
         class UnevenTable:
             cells = [
@@ -96,6 +108,22 @@ class ConverterTests(unittest.TestCase):
         self.assertGreater(widths[0], widths[1])
         self.assertIsNotNone(result.rows[0].height)
         self.assertGreater(result.rows[1].height.twips, result.rows[0].height.twips * 4)
+
+    def test_append_table_scales_narrow_offset_table_to_printable_width(self) -> None:
+        class OffsetNarrowTable:
+            cells = [(84.6, 0.0, 144.6, 20.0), (144.6, 0.0, 264.6, 20.0)]
+
+        document = PdfToWordConverter._new_document(595.3, 841.9)
+        PdfToWordConverter()._append_table(document, OffsetNarrowTable(), (), 1.0, 1.0)
+        result = document.tables[0]
+        section = document.sections[0]
+        available_width = section.page_width.pt - section.left_margin.pt - section.right_margin.pt
+        grid_widths = [column.w.twips / 20 for column in result._tbl.tblGrid.gridCol_lst]
+        table_indent = result._tbl.tblPr.first_child_found_in("w:tblInd")
+
+        self.assertAlmostEqual(sum(grid_widths), available_width, delta=1.0)
+        self.assertAlmostEqual(grid_widths[1] / grid_widths[0], 2.0, places=2)
+        self.assertEqual(table_indent.get(qn("w:w")), "0")
 
     def test_new_document_preserves_source_page_size(self) -> None:
         document = PdfToWordConverter._new_document(595.3, 841.9)

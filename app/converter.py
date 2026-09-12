@@ -238,9 +238,10 @@ class PdfToWordConverter:
         section = document.sections[0]
         available_width = section.page_width.pt - section.left_margin.pt - section.right_margin.pt
         source_table_width = x_edges[-1] - x_edges[0]
-        width_scale = 1.0
-        if source_table_width > available_width:
-            width_scale = available_width / source_table_width
+        # Use the Word printable area rather than the PDF scan margins as the output canvas.
+        if source_table_width <= 0:
+            return
+        width_scale = available_width / source_table_width
 
         column_widths = [max((end - start) * width_scale, 1.0) for start, end in zip(x_edges, x_edges[1:])]
         for column, width in zip(word_table.columns, column_widths):
@@ -248,10 +249,7 @@ class PdfToWordConverter:
         table_width = sum(column_widths)
         self._set_table_width(word_table, table_width)
 
-        source_left = x_edges[0] * width_scale
-        table_indent = max(0.0, source_left - section.left_margin.pt)
-        table_indent = min(table_indent, max(0.0, available_width - table_width))
-        self._set_table_indent(word_table, table_indent)
+        self._set_table_indent(word_table, 0.0)
 
         for row, start, end in zip(word_table.rows, y_edges, y_edges[1:]):
             row_height = max(end - start, 1.0)
@@ -314,7 +312,8 @@ class PdfToWordConverter:
         if words:
             return self._words_to_text(words)
         selected = [line for line in lines if self._inside(line.center, box, scale_x, scale_y)]
-        return "\n".join(line.text for line in sorted(selected, key=lambda line: (line.y, line.x)))
+        combined_text = "\n".join(line.text for line in sorted(selected, key=lambda line: (line.y, line.x)))
+        return self._recover_misread_list_marker(combined_text)
 
     def _words_to_text(self, words: list[OcrWord]) -> str:
         rows: list[list[OcrWord]] = []
@@ -332,10 +331,11 @@ class PdfToWordConverter:
                 continue
             rows[-1].append(word)
             row_bounds[-1] = (min(row_top, word.y), max(row_bottom, word.y + word.height))
-        return "\n".join(
+        combined_text = "\n".join(
             self._normalize_text(" ".join(word.text for word in sorted(row, key=lambda item: item.x)))
             for row in rows
         )
+        return self._recover_misread_list_marker(combined_text)
 
 
 def qn(name: str) -> str:
